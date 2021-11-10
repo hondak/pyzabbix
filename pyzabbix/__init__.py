@@ -1,8 +1,13 @@
+import os
 import logging
 import requests
 import json
 import semantic_version
 
+import socks
+import urllib3
+from urllib3.exceptions import InsecureRequestWarning
+urllib3.disable_warnings(InsecureRequestWarning)
 
 class _NullHandler(logging.Handler):
     def emit(self, record):
@@ -16,7 +21,7 @@ class ZabbixAPIException(Exception):
     """ generic zabbix api exception
     code list:
          -32700 - invalid JSON. An error occurred on the server while parsing the JSON text (typo, wrong quotes, etc.)
-         -32600 - received JSON is not a valid JSON-RPC Request 
+         -32600 - received JSON is not a valid JSON-RPC Request
          -32601 - requested remote-procedure does not exist
          -32602 - invalid method parameters
          -32603 - Internal JSON-RPC error
@@ -43,7 +48,6 @@ class ZabbixAPI(object):
             session: optional pre-configured requests.Session instance
             use_authenticate: Use old (Zabbix 1.8) style authentication
             timeout: optional connect and read timeout in seconds, default: None (if you're using Requests >= 2.4 you can set it as tuple: "(connect, read)" which is used to set individual connect and read timeouts.)
-            detect_version: autodetect Zabbix API version
         """
 
         if session:
@@ -58,6 +62,15 @@ class ZabbixAPI(object):
             'Cache-Control': 'no-cache'
         })
 
+        proxies = {}
+        for key in os.environ:
+            if key == 'HTTP_PROXY':
+                proxies.update({'http': os.environ['HTTP_PROXY']})
+            if key == 'HTTPS_PROXY':
+                proxies.update({'https': os.environ['HTTPS_PROXY']})
+        if proxies:
+          self.session.proxies.update(proxies)
+
         self.use_authenticate = use_authenticate
         self.use_api_token = False
         self.auth = ''
@@ -69,7 +82,11 @@ class ZabbixAPI(object):
         logger.info("JSON-RPC Server Endpoint: %s", self.url)
 
         self.version = ''
-        self._detect_version = detect_version
+        if detect_version:
+            self.version = semantic_version.Version(
+                self.api_version()
+            )
+            logger.info("Zabbix API version is: %s", self.api_version())
 
     def __enter__(self):
         return self
@@ -89,12 +106,6 @@ class ZabbixAPI(object):
            :param user: Username used to login into Zabbix
            :param api_token: API Token to authenticate with
         """
-
-        if self._detect_version:
-            self.version = semantic_version.Version(
-                self.api_version()
-            )
-            logger.info("Zabbix API version is: %s", str(self.version))
 
         # If the API token is explicitly provided, use this instead.
         if api_token is not None:
@@ -165,7 +176,8 @@ class ZabbixAPI(object):
         response = self.session.post(
             self.url,
             data=json.dumps(request_json),
-            timeout=self.timeout
+            timeout=self.timeout,
+            verify=False
         )
         logger.debug("Response Code: %s", str(response.status_code))
 
